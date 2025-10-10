@@ -1,0 +1,19 @@
+name: H100
+channels:
+- https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/main
+- https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/r
+- https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/msys2
+- https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/conda-forge
+dependencies:
+- python=3.12
+- pip
+- accelerate>=1.11.0
+- gradio>=5.44.0
+- pre-commit>=4.2.0
+- pymupdf>=1.26.3
+- av>=15.0.0
+- pip:
+  - spaces>=0.40.1
+  - sglang>=0.5.1.post2
+  - vllm>=0.10.1.1
+  - transformers-v4.55.0-GLM-4.5V-preview

@@ -1,0 +1,5 @@
+/logs/eval_res_of_llm/*
+/logs/llm_score/*
+*.pk
+/data/evaluation/eval_res_of_llm/*
+/data/evaluation/llm_score/*
