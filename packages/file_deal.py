@@ -132,6 +132,36 @@ def search_pk(dir):
     ]
     return pk_indexs
 
+def read_dataset(file_path, required=None):
+    if required is None:
+        required = []
+    suffix = os.path.splitext(file_path)[1].lower()
+    if suffix == ".csv":
+        return read_dataset_csv(file_path, required)
+    elif suffix in [".xls", ".xlsx"]:
+        return read_dataset_excel(file_path, required)
+    else:
+        logger.error(f"[ERR] Unsupported file format: {suffix}")
+        exit(1)
+
+
+def read_dataset_csv(csv_path, required=None):
+    if required is None:
+        required = []
+    logger.info(f"Loading dataset from CSV: {csv_path} ...")
+    try:
+        df = pd.read_csv(csv_path)
+        miss = [c for c in required if c not in df.columns]
+        if miss:
+            logger.info(f"[ERR] Missing columns: {', '.join(miss)}")
+            logger.error(f"[ERR] Missing columns: {', '.join(miss)}")
+
+    except Exception as e:
+        logger.info(f"[ERR] load csv: {e}")
+        logger.error(f"[ERR] load csv: {e}")
+        exit(1)
+
+    return df
 
 def read_dataset_excel(excel_path, required=None):
     if required is None:
@@ -202,17 +232,5 @@ def shuffle_excel_rows(input_file, output_file=None, random_seed=None):
 
 
 if __name__ == "__main__":
-    from constants import PROJECT_ROOT
-
-    test_dir = os.path.join(PROJECT_ROOT, "test")
-    for i in range(3):
-        pk_dump(
-            (i, "韭菜鸡蛋馅包子", "包子", "gpt-4o-2024-11-20", '{"score":3}'),
-            i,
-            test_dir,
-        )
-    pk_indexs = search_pk(test_dir)
-    logger.info(pk_indexs)
-    for pk_index in pk_indexs:
-        logger.info(pk_load(pk_index, test_dir))
-    pass
+    print(read_dataset(r'D:\crwu\zjts_foodname\data\evaluation\eval_res_of_llm\20250930122257_evaluation_results_qwen2.5-vl-72b-instruct_by_api.xlsx'))
+    print(read_dataset_excel(r'D:\crwu\zjts_foodname\data\evaluation\eval_res_of_llm\20250930122257_evaluation_results_qwen2.5-vl-72b-instruct_by_api.xlsx'))

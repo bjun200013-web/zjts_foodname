@@ -12,7 +12,7 @@ from packages.my_logger import setup_logging
 log_dir = os.path.join(PROJECT_ROOT, "logs", "eval_res_of_llm")
 logger = setup_logging(log_dir=log_dir)
 from packages.file_deal import (
-    read_dataset_excel,
+    read_dataset,
 )
 
 
@@ -43,8 +43,8 @@ if __name__ == "__main__":
     output = args.output if args.output else os.path.dirname(score_res_input)
 
     # 读取数据集
-    samples_df = read_dataset_excel(score_res_input)
-    dimension_df = read_dataset_excel(food_dimension_input)
+    samples_df = read_dataset(score_res_input)
+    dimension_df = read_dataset(food_dimension_input)
     # print(samples_df)
     # print(dimension_df)
     dimensions = dimension_df.columns.tolist()

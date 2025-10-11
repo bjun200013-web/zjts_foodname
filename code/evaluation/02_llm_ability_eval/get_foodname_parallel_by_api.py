@@ -28,7 +28,7 @@ from packages.file_deal import (
     pk_dump,
     search_pk,
     pk_load,
-    read_dataset_excel,
+    read_dataset,
     shuffle_excel_rows,
 )
 
@@ -250,7 +250,7 @@ if __name__ == "__main__":
         excel_path = shuffle_excel_rows(excel_path)
 
     # 读取数据集
-    samples_df = read_dataset_excel(
+    samples_df = read_dataset(
         excel_path, required=["image_path", "food_name", "type"]
     )
     samples_df.dropna(subset=["food_name"], inplace=True)
