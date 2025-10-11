@@ -17,7 +17,7 @@ cp /etc/apt/sources.list /etc/apt/sources.list.bak && \
 sed -i 's|http://archive.ubuntu.com|https://mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list && \
 sed -i 's|http://security.ubuntu.com|https://mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list
 
-    
+
 pip install 'ms-swift[all]' -U
 pip install "sglang[all]<0.5" -U
 pip install "vllm>=0.5.1" "transformers<4.56" "trl<0.21" -U

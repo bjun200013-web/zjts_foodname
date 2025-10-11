@@ -5,6 +5,7 @@ import os
 import argparse
 from typing import List, Dict, Any, Tuple
 
+from packages.file_deal import read_dataset, save_data_result
 import torch
 import pandas as pd
 from tqdm import tqdm
@@ -306,8 +307,8 @@ def generate_batch(
         }
 
     # 3) 逐条样本计算“前缀长度”，得到每条的最大可生成步数；取全 batch 的最小值
-    
-    
+
+
     attn = inputs.get("attention_mask", None)
     # 同时用 pad 掩码与 attention_mask 估计前缀长度，取较大值，避免低估
     pad_mask = None
@@ -324,7 +325,7 @@ def generate_batch(
         in_lens = torch.tensor(
             [inputs["input_ids"].shape[1]] * inputs["input_ids"].shape[0]
         )
-        
+
     # attn = inputs.get("attention_mask", None)
     # if attn is None:
     #     # 没有 attention_mask 时，用输入长度列数兜底
@@ -333,8 +334,8 @@ def generate_batch(
     #     )
     # else:
     #     in_lens = attn.sum(dim=1)  # 每条样本真实前缀长度（含图片 tokens 的占位影响）
-        
-        
+
+
     # 每条的可用预算
     per_sample_cap = (args.max_model_len - in_lens - 1).clamp(min=1)
     # 取本 batch 能统一使用的 cap
@@ -496,7 +497,7 @@ def evaluate_model_accuracy(
                 {
                     **meta,
                     "model_prediction": model_answer,
-                    "model_thinking": model_thinking,                    
+                    "model_thinking": model_thinking,
                     "is_correct": is_ok,
                     "raw_answer": pred,
                 }
@@ -514,8 +515,8 @@ def evaluate_model_accuracy(
 
     # 保存结果
     suffix = os.path.basename(model_path.rstrip("/"))
-    out_file = os.path.join(output_dir, f"evaluation_results_{suffix}_{acc:.2f}.xlsx")
-    pd.DataFrame(results).to_excel(out_file, index=False)
+    out_file = os.path.join(output_dir, f"evaluation_results_{suffix}_{acc:.2f}.csv")
+    save_data_result(results, out_file)
     print(f"Saved {total} results to {out_file}")
 
 
@@ -550,7 +551,7 @@ def main():
     )
 
     # 生成相关
-    # 调试可以用10个加快测试速度    
+    # 调试可以用10个加快测试速度
     ap.add_argument("--batch_size", type=int, default=50)
     ap.add_argument("--max_new_tokens", type=int, default=2048)
     ap.add_argument("--temperature", type=float, default=0.0)
@@ -611,7 +612,7 @@ def main():
     # 读取 Excel
     print(f"Loading dataset from Excel: {args.input_excel_path} ...")
     try:
-        df = pd.read_excel(args.input_excel_path)
+        df = read_dataset(args.input_excel_path)
         required = ["image_path", "food_name", "type"]
         miss = [c for c in required if c not in df.columns]
         if miss:

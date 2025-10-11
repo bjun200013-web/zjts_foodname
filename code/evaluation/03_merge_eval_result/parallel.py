@@ -29,6 +29,7 @@ from packages.text_match import exact_match
 from packages.call_api import call_openai_with_timeout
 from packages.file_deal import (
     pk_dump,
+    read_dataset,
     search_pk,
     pk_load,
 )
@@ -154,7 +155,7 @@ def main():
     elif args.eval_input and os.path.exists(args.eval_input):
         data_file = args.eval_input
         if args.max_test_img_num == 0:
-            total = len(pd.read_excel(data_file))  # 评估数据条数
+            total = len(read_dataset(data_file))  # 评估数据条数
         else:
             total = args.max_test_img_num  # 评估数据条数
         eval_end_time = time.time()
@@ -180,7 +181,7 @@ def main():
         processes = []
         for batch in range(num_batches):
             start = batch * num_samples
-            out_file = os.path.join(out_dir, f"eval_{start}.xlsx")
+            out_file = os.path.join(out_dir, f"eval_{start}.csv")
             log_file = os.path.join(out_dir, f"log_{batch}.txt")
 
             logger.info(f"启动第{batch}批：样本 {start} ~ {start+num_samples-1}, 日志: {log_file}")
@@ -190,7 +191,7 @@ def main():
 
         # 等待所有进程完成
         expected_files = {
-            os.path.join(out_dir, f"eval_{b*num_samples}.xlsx")
+            os.path.join(out_dir, f"eval_{b*num_samples}.csv")
             for b in range(num_batches)
         }
         while True:

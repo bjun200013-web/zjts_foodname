@@ -49,9 +49,9 @@ if __name__ == "__main__":
     # print(dimension_df)
     dimensions = dimension_df.columns.tolist()
     dimensions.remove("food_name")  # 去掉菜名列, 剩下的都是维度
-    logger.info(f"维度列表: {dimensions}")    
+    logger.info(f"维度列表: {dimensions}")
     new_main_df = pd.DataFrame(columns=[column for column in samples_df.columns if '的评分' not in column] + dimensions)
-    
+
     for column in new_main_df.columns:
         if column in samples_df.columns:
             new_main_df[column] = samples_df[column].values
@@ -104,7 +104,7 @@ if __name__ == "__main__":
 
     # 计算每个维度每个取值的平均分和标准差
     output_path = os.path.join(
-        output, score_res_input.replace(".xlsx", "_dimension_analysis.xlsx")
+        output, score_res_input.replace(".csv", "_dimension_analysis.xlsx")
     )
     with pd.ExcelWriter(output_path) as writer:
         new_main_df.to_excel(writer, sheet_name="所有样本", index=False)

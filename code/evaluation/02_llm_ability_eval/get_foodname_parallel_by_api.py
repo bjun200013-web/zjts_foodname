@@ -26,6 +26,7 @@ from packages.call_api import call_openai_with_timeout
 from packages.file_deal import (
     encode_image_with_resize,
     pk_dump,
+    save_data_result,
     search_pk,
     pk_load,
     read_dataset,
@@ -307,14 +308,14 @@ if __name__ == "__main__":
     results = []
     # 所有任务完成, 保存最终结果
     final_output_path = os.path.join(
-        args.output_path, f"{current_time}_evaluation_results_{model_name}_by_api.xlsx"
+        args.output_path, f"{current_time}_evaluation_results_{model_name}_by_api.csv"
     )
     pk_indexs = search_pk(temp_result_dir)
     for pk_index in pk_indexs:
         result = pk_load(pk_index, temp_result_dir)
         results.append(result)
     results.sort(key=lambda x: x["sample_index"])
-    pd.DataFrame(results).to_excel(final_output_path, index=False)
+    save_data_result(results, final_output_path)
     logger.info(f"已保存最终结果到: {final_output_path}")
 
     # 清理临时文件夹

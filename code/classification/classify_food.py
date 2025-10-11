@@ -41,11 +41,11 @@ def chinese_ljust(text, width, fillchar=' '):
 def format_csv_to_aligned_columns(csv_file_path, output_txt_path=None):
     """
     将CSV文件格式化为对齐的列
-    
+
     Args:
         csv_file_path: 输入的CSV文件路径
         output_txt_path: 输出的文本文件路径（可选）
-    
+
     Returns:
         str: 格式化后的文本
     """
@@ -53,19 +53,19 @@ def format_csv_to_aligned_columns(csv_file_path, output_txt_path=None):
     with open(csv_file_path, 'r', encoding='utf-8') as csv_file:
         reader = csv.reader(csv_file)
         rows = list(reader)
-    
+
     # 计算每列的最大显示宽度（考虑中文字符）
     if not rows:
         return ""
-    
+
     num_columns = len(rows[0])
     column_widths = [0] * num_columns
-    
+
     for row in rows:
         for i, cell in enumerate(row):
             cell_width = sum(wcwidth(char) for char in str(cell))
             column_widths[i] = max(column_widths[i], cell_width)
-    
+
     # 构建格式化字符串
     formatted_lines = []
     for row in rows:
@@ -75,14 +75,14 @@ def format_csv_to_aligned_columns(csv_file_path, output_txt_path=None):
             formatted_cell = chinese_ljust(str(cell), column_widths[i])
             formatted_cells.append(formatted_cell)
         formatted_lines.append(",".join(formatted_cells))  # 用逗号分隔
-    
+
     formatted_text = "\n".join(formatted_lines)
-    
+
     # 输出到文件（如果指定了输出路径）
     if output_txt_path:
         with open(output_txt_path, 'w', encoding='utf-8') as txt_file:
             txt_file.write(formatted_text)
-    
+
     return formatted_text
 
 def get_unfinished_tasks(temp_result_dir, total_tasks):
@@ -715,15 +715,15 @@ if __name__ == "__main__":
 
     t_start = time.time()
 
-    
+
     food_name_list = FD_["菜名"].tolist()
     # random.shuffle(food_name_list)
     test_num = 30000
     food_name_list = food_name_list[:test_num]
-    
+
     logger.info(f"{len(food_name_list)} food names remaining for processing...")
-    
-    
+
+
     batch_size = 5
     batch_list = [
         food_name_list[i : i + batch_size] for i in range(0, len(food_name_list), batch_size)

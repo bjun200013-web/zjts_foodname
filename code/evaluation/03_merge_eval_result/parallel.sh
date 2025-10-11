@@ -12,7 +12,7 @@ get_output_dir() {
     local input_file="$1"
     local dir_path=$(dirname "$input_file")
     local parent_dir=$(basename "$dir_path")
-    local filename=$(basename "$input_file" .xlsx)
+    local filename=$(basename "$input_file" .csv)
     # 获取时间信息
     timestamp_short=$(date +%Y%m%d%H%M%S)
     echo "eval_data/llm_score/api_results/${timestamp_short}_parallel_results_${parent_dir}_${filename}"
@@ -62,7 +62,7 @@ for ((i=0; i<$SCORE_TIMES; i++)); do
 
   for i in $(seq 0 $((NUM_BATCHES-1))); do
     START=$((i * NUM_SAMPLES))
-    OUT_FILE="${OUT_DIR}/eval_${START}.xlsx"
+    OUT_FILE="${OUT_DIR}/eval_${START}.csv"
     echo "启动第$i批：样本 $START ~ $((START+NUM_SAMPLES-1))"
     nohup python $SCRIPT_DIR/main.py --start $START --num $NUM_SAMPLES --input "$DATA_FILE" --output "$OUT_FILE" >> "${OUT_DIR}/log_${i}.txt" 2>&1 &
   done

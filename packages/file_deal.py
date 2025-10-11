@@ -181,6 +181,45 @@ def read_dataset_excel(excel_path, required=None):
 
     return df
 
+def save_data_result(result, output_path):
+    """
+    保存结果到文件
+    """
+    if isinstance(result, pd.DataFrame):
+        df = result
+    elif isinstance(result, list):
+        df = pd.DataFrame(result)
+    else:
+        logger.error(f"[ERR] Unsupported data type: {type(result)}")
+        return
+    suffix = os.path.splitext(output_path)[1].lower()
+    if suffix == ".csv":
+        save_data_result_to_csv(df, output_path)
+    elif suffix in [".xls", ".xlsx"]:
+        save_data_result_to_excel(df, output_path)
+    else:
+        logger.error(f"[ERR] Unsupported file format: {suffix}")
+        exit(1)
+
+def save_data_result_to_excel(df, output_path):
+    """
+    保存结果到Excel
+    """
+    try:
+        df.to_excel(output_path, index=False)
+        logger.info(f"结果已保存到: {output_path}")
+    except Exception as e:
+        logger.error(f"保存结果到Excel时出错: {e}")
+        
+def save_data_result_to_csv(df, output_path):
+    """
+    保存结果到CSV
+    """
+    try:
+        df.to_csv(output_path, index=False)
+        logger.info(f"结果已保存到: {output_path}")
+    except Exception as e:
+        logger.error(f"保存结果到CSV时出错: {e}")
 
 def shuffle_excel_rows(input_file, output_file=None, random_seed=None):
     """

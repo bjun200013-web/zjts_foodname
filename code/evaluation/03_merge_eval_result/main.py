@@ -23,6 +23,8 @@ from packages.text_match import exact_match
 from packages.call_api import call_openai_with_timeout
 from packages.file_deal import (
     pk_dump,
+    read_dataset,
+    save_data_result,
     search_pk,
     pk_load,
 )
@@ -74,7 +76,7 @@ def evaluate_wrapper(args):
         if score is None:
             logger.error(f"获取分数失败, 详情: {response}")
             return (index, local_food_id, real, predicted, model_name, None, False)
-        data = (local_food_id, real, predicted, model_name, res)        
+        data = (local_food_id, real, predicted, model_name, res)
         logger.info(f'菜品: {real}, id: {local_food_id}, 模型预测: {predicted}, 模型{model_name}打分: {score}')
         pk_dump(data, index, output_path)
         return (index, local_food_id, real, predicted, model_name, score, True)
@@ -100,7 +102,7 @@ if __name__ == "__main__":
     os.makedirs(pk_path, exist_ok=True)
 
     # 读取当前批次数据
-    df = pd.read_excel(file_path)
+    df = read_dataset(file_path)
     batch_df = df.iloc[start : start + num].copy()
 
     real_dishes = batch_df["ground_truth_answer"]
@@ -126,22 +128,22 @@ if __name__ == "__main__":
 
     # 准备所有任务
     # 一个一共要跑num个菜名, 每个菜名要跑len(models)个评分, 每个批次要跑num*len(models)个评分
-    # 按model顺序评估, 那么0~num-1是models[0]的评分, 第x菜的第y个model评分就是start*len(models) + (y-1)*num + (x-1)        
+    # 按model顺序评估, 那么0~num-1是models[0]的评分, 第x菜的第y个model评分就是start*len(models) + (y-1)*num + (x-1)
     tasks = []
     target_index_list = list(
         range(start * len(models), start * len(models) + len(real_dishes) * len(models))
     )
-    
-    
+
+
     # 初始化进度条
     pbar = tqdm(total=len(target_index_list), desc="API调用进度")
-    
-    for index in target_index_list:                
+
+    for index in target_index_list:
         model = models[(index - start * len(models)) // len(real_dishes)]
         local_food_id = (index - start * len(models)) % len(real_dishes)
         real = real_dishes.values[local_food_id]
         pred = predicted_dishes.values[local_food_id]
-        
+
         if pd.isna(real) or pd.isna(pred):
             # 直接处理空值情况
             pk_dump((local_food_id, real, pred, model, '0'), index, pk_path)
@@ -152,7 +154,7 @@ if __name__ == "__main__":
             pk_dump((local_food_id, real, pred, model, '5'), index, pk_path)
             logger.info(f'菜品: {real}, id: {local_food_id}, 模型预测: {pred}, 模型{model}打分: {5}')
             continue
-        
+
         # 需要API调用的任务
         tasks.append((index, local_food_id, model, real, pred, pk_path))
 
@@ -164,14 +166,14 @@ if __name__ == "__main__":
         count += 1
         pbar.update(1)
     logger.info(f'更新进度{count}')
-    tasks = [task for task in tasks if task[0] in remain_index_list]    
+    tasks = [task for task in tasks if task[0] in remain_index_list]
     logger.info(f'待完成的菜品: {remain_index_list}')
     # 分批处理任务, 避免一次性提交太多
     # todo 试下190有没有提升
     batch_size = 60
-    while remain_index_list:        
+    while remain_index_list:
         for i in range(0, len(tasks), batch_size):
-            batch_tasks = tasks[i:i + batch_size]            
+            batch_tasks = tasks[i:i + batch_size]
             with Pool(min(batch_size, len(batch_tasks))) as pool:
                 # 使用 imap_unordered 获取完成顺序的结果
                 for result in pool.imap_unordered(evaluate_wrapper, batch_tasks):
@@ -182,13 +184,13 @@ if __name__ == "__main__":
                         pass
         # 检查已完成的pk并重试
         remain_index_list = list(set(target_index_list) - set(search_pk(pk_path)))
-        tasks = [task for task in tasks if task[0] in remain_index_list]        
+        tasks = [task for task in tasks if task[0] in remain_index_list]
         logger.info(f'剩余未完成的菜品: {remain_index_list}')
 
     pbar.close()
 
     logger.info(f"✅ 菜品{start}~{start+num}评估完成。")
-    
+
     # 从临时文件加载所有结果
     pk_indexs = search_pk(pk_path)
     for pk_index in pk_indexs:
@@ -196,6 +198,6 @@ if __name__ == "__main__":
             continue
         local_food_id, real, pred, model, res = pk_load(pk_index, pk_path)
         results_df.loc[local_food_id, model + "的评分"] = res
-    
-    results_df.to_excel(output_path, index=False)
+
+    save_data_result(results_df, output_path)
     logger.info(f"✅ 批次评估结果已保存至 {output_path}")

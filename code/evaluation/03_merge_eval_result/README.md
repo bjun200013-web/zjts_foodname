@@ -12,8 +12,8 @@
 
 ## 完整并行评估流程
 
-**输入**: 上一步模型推理的输出文件`/path/to/model/output.xlsx`（包含模型预测结果和ground truth的Excel文件）。
+**输入**: 上一步模型推理的输出文件`/path/to/model/output.csv`（包含模型预测结果和ground truth的Excel文件）。
 
-**使用方法**: `sh parallel.sh /path/to/model/output.xlsx`
+**使用方法**: `sh parallel.sh /path/to/model/output.csv`
 
 **输出**：打印评估分数统计，以及保存LLM评分汇总表

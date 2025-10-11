@@ -12,6 +12,7 @@ from packages.constants import (
     CLAUDE_MODEL_NAME,
     GEMINI_MODEL_NAME,
 )
+from packages.file_deal import read_dataset, save_data_result
 from packages.my_logger import setup_logging
 
 log_dir = os.path.join(PROJECT_ROOT, "logs", "eval_res_of_llm")
@@ -86,20 +87,20 @@ def main():
 
     # 合并所有批次结果
     all_files = sorted(
-        glob.glob(os.path.join(args.input_dir, "eval_*.xlsx")),
-        key=lambda x: int(re.search(r"eval_(\d+)\.xlsx", x).group(1)),
+        glob.glob(os.path.join(args.input_dir, "eval_*.csv")),
+        key=lambda x: int(re.search(r"eval_(\d+)\.csv", x).group(1)),
     )
     if not all_files:
-        logger.error(f"错误: 在目录 {args.input_dir} 中没有找到 eval_*.xlsx 文件")
+        logger.error(f"错误: 在目录 {args.input_dir} 中没有找到 eval_*.csv 文件")
         return
 
     logger.info(f"找到 {len(all_files)} 个文件需要合并")
-    dfs = [pd.read_excel(f) for f in all_files]
+    dfs = [read_dataset(f) for f in all_files]
     all_results = pd.concat(dfs, ignore_index=True)
 
     # 保存合并结果
-    merged_output = os.path.join(output_dir, "final_merged_results.xlsx")
-    all_results.to_excel(merged_output, index=False)
+    merged_output = os.path.join(output_dir, "final_merged_results.csv")
+    save_data_result(all_results, merged_output)
     logger.info(f"合并完毕, 总条数: {len(all_results)}")
     logger.info(f"合并结果保存至: {merged_output}")
 
@@ -147,9 +148,9 @@ def main():
 
     # 保存结果
     scores_output = os.path.join(
-        output_dir, f"final_merged_scores_{overall_avg:.3f}.xlsx"
+        output_dir, f"final_merged_scores_{overall_avg:.3f}.csv"
     )
-    df.to_excel(scores_output, index=False)
+    save_data_result(df, scores_output)
 
     logger.info(f"✅ 提取完成, 结果已保存为: {scores_output}")
 
