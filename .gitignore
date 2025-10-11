@@ -3,3 +3,4 @@
 *.pk
 /data/evaluation/eval_res_of_llm/*
 /data/evaluation/llm_score/*
+data/classification/output*/*.csv

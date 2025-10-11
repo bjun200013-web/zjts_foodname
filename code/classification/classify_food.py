@@ -1,3 +1,4 @@
+import csv
 import os
 import pandas as pd
 from openai import OpenAI
@@ -7,14 +8,83 @@ import time
 from multiprocessing import Pool
 from tqdm import tqdm
 from io import StringIO  # 添加 StringIO 导入
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
-from requests.exceptions import Timeout, RequestException
-import httpx
+from wcwidth import wcwidth
 
-def pk_dump(D, fn):
-    with open(fn, "wb") as f:
-        pk.dump(D, f, protocol=pk.HIGHEST_PROTOCOL)
-    return
+from packages.constants import (
+    PROJECT_ROOT,
+    EVAL_RES_OUTPUT_PATH,
+    EVAL_DATA_IMAGE_ROOT,
+    EVAL_DATA_EXCEL_PATH,
+    API_URL,
+    API_KEY_DISCOUNT,
+)
+from packages.my_logger import setup_logging
+
+log_dir = os.path.join(PROJECT_ROOT, "logs", "eval_res_of_llm")
+logger = setup_logging(log_dir=log_dir)
+from packages.text_match import _BOX_RE, exact_match, extract_final_cn
+from packages.call_api import call_openai_with_timeout
+from packages.file_deal import (
+    encode_image_with_resize,
+    pk_dump,
+    search_pk,
+    pk_load,
+    read_dataset_excel,
+    shuffle_excel_rows,
+)
+
+def chinese_ljust(text, width, fillchar=' '):
+    """支持中文字符的左对齐"""
+    current_width = sum(wcwidth(char) for char in text)
+    padding = max(0, width - current_width)
+    return text + fillchar * padding
+
+def format_csv_to_aligned_columns(csv_file_path, output_txt_path=None):
+    """
+    将CSV文件格式化为对齐的列
+    
+    Args:
+        csv_file_path: 输入的CSV文件路径
+        output_txt_path: 输出的文本文件路径（可选）
+    
+    Returns:
+        str: 格式化后的文本
+    """
+    # 读取CSV文件
+    with open(csv_file_path, 'r', encoding='utf-8') as csv_file:
+        reader = csv.reader(csv_file)
+        rows = list(reader)
+    
+    # 计算每列的最大显示宽度（考虑中文字符）
+    if not rows:
+        return ""
+    
+    num_columns = len(rows[0])
+    column_widths = [0] * num_columns
+    
+    for row in rows:
+        for i, cell in enumerate(row):
+            cell_width = sum(wcwidth(char) for char in str(cell))
+            column_widths[i] = max(column_widths[i], cell_width)
+    
+    # 构建格式化字符串
+    formatted_lines = []
+    for row in rows:
+        formatted_cells = []
+        for i, cell in enumerate(row):
+            # 左对齐，宽度为该列最大宽度
+            formatted_cell = chinese_ljust(str(cell), column_widths[i])
+            formatted_cells.append(formatted_cell)
+        formatted_lines.append(",".join(formatted_cells))  # 用逗号分隔
+    
+    formatted_text = "\n".join(formatted_lines)
+    
+    # 输出到文件（如果指定了输出路径）
+    if output_txt_path:
+        with open(output_txt_path, 'w', encoding='utf-8') as txt_file:
+            txt_file.write(formatted_text)
+    
+    return formatted_text
 
 def get_unfinished_tasks(temp_result_dir, total_tasks):
     """
@@ -25,81 +95,12 @@ def get_unfinished_tasks(temp_result_dir, total_tasks):
         temp_result_dir: 临时结果文件夹路径
         max_tasks: 最大任务数限制，如果指定则只检查前max_tasks个任务
     """
-    completed_tasks = set()
     # 扫描临时文件夹中的结果文件
-    for filename in os.listdir(temp_result_dir):
-        if filename.endswith(".pk"):
-            try:
-                idx = int(filename[:-3])  # 从"X.pk"中提取索引
-                completed_tasks.add(idx)
-            except ValueError:
-                continue
-            
+    completed_tasks = set(search_pk(temp_result_dir))
     all_tasks = set(range(total_tasks))
     return list(all_tasks - completed_tasks)
 
-def parse_csv_from_response_bk(response_text):
-    """
-    从OpenAI响应中解析CSV数据，处理多种可能的格式
-    Args:
-        response_text: 包含CSV数据的响应文本
-    Returns:
-        pandas DataFrame对象
-    """
-    if not isinstance(response_text, str):
-        print(f"输入类型错误：预期字符串，实际得到 {type(response_text)}")
-        return None
-        
-    try:
-        # 情况1: 标准的 ```csv 格式
-        csv_marker = '```csv\n'
-        start_idx = response_text.find(csv_marker)
-        if start_idx != -1:
-            start_idx += len(csv_marker)
-            end_idx = response_text.find('```', start_idx)
-            if end_idx != -1:
-                csv_content = response_text[start_idx:end_idx].strip()
-                if csv_content:
-                    return pd.read_csv(StringIO(csv_content))
-        
-        # 情况2: 无标记的CSV格式（直接以标题行开始）
-        if response_text.strip().startswith('菜名/食品名,'):
-            return pd.read_csv(StringIO(response_text.strip()))
-        
-        # 情况3: 有其他文本前缀的CSV（查找第一个CSV样式的行）
-        lines = response_text.split('\n')
-        for i, line in enumerate(lines):
-            if '菜名/食品名,' in line:
-                csv_content = '\n'.join(lines[i:])
-                if csv_content:
-                    return pd.read_csv(StringIO(csv_content))
-        
-        # 情况4: 有其他标记格式（如 --- 分隔）
-        sections = response_text.split('---')
-        for section in sections:
-            if '菜名/食品名,' in section:
-                csv_section = section.strip()
-                if csv_section:
-                    return pd.read_csv(StringIO(csv_section))
-        
-        # 未找到任何CSV数据
-        print("未找到CSV格式数据，原文内容:")
-        print("-" * 50)
-        print(response_text[:200] + "..." if len(response_text) > 200 else response_text)
-        print("-" * 50)
-        return None
-        
-    except pd.errors.EmptyDataError:
-        print("CSV数据为空")
-        return None
-    except Exception as e:
-        print(f"解析CSV数据时出错: {str(e)}")
-        print("问题数据内容:")
-        print("-" * 50)
-        print(response_text[:200] + "..." if len(response_text) > 200 else response_text)
-        print("-" * 50)
-        return None
-        
+
 def parse_csv_from_response(response_text, batch_size):
     """
     从OpenAI响应中解析CSV数据，处理多种可能的格式
@@ -109,238 +110,566 @@ def parse_csv_from_response(response_text, batch_size):
         pandas DataFrame对象
     """
     if not isinstance(response_text, str):
-        print(f"输入类型错误：预期字符串，实际得到 {type(response_text)}")
+        logger.error(f"输入类型错误：预期字符串，实际得到 {type(response_text)}")
         return None
-    
+
     start_id = 0
-    lines = [line.strip(' `') for line in response_text.splitlines()]
+    lines = [line.strip(" `") for line in response_text.splitlines()]
     for id, line in enumerate(lines):
-        if line.startswith('菜名/食品名,'):
-            start_id = id+1            
+        if line.startswith("菜品名,"):
+            start_id = id + 1
             break
-        
+
     if not start_id:
         # 未找到任何CSV数据
-            print("未找到CSV格式数据，原文内容:")
-            print("-" * 50)
-            print(response_text[:200] + "..." if len(response_text) > 200 else response_text)
-            print("-" * 50)
-            return None
-    if start_id + batch_size > len(response_text.splitlines()):
-        print("警告: 预期的行数超过响应中的实际行数，可能数据不完整")
+        logger.error("未找到CSV格式数据，原文内容:")
+        logger.error("-" * 50)
+        logger.error(
+            response_text[:200] + "..." if len(response_text) > 200 else response_text
+        )
+        logger.error("-" * 50)
         return None
-    for id, line in enumerate(lines[start_id:start_id + batch_size]):
-        if len(line.split(',')) != 8:
-            print("警告: 解析的CSV列数不匹配预期，可能数据格式有误")
-            print(f'line id={start_id + id + 1}, line={line}')
+    if start_id + batch_size > len(response_text.splitlines()):
+        logger.warning("警告: 预期的行数超过响应中的实际行数，可能数据不完整")
+        return None
+    for id, line in enumerate(lines[start_id : start_id + batch_size]):
+        if len(line.split(",")) != 11:
+            logger.warning("警告: 解析的CSV列数不匹配预期，可能数据格式有误")
+            logger.warning(f"line id={start_id + id + 1}, line={line}")
             return None
 
-    csv_content = '\n'.join(lines[start_id:start_id + batch_size])
+    csv_content = "\n".join(lines[start_id : start_id + batch_size])
     if csv_content:
         try:
-            return pd.read_csv(StringIO(csv_content))
-                    
+            # return pd.read_csv(StringIO(csv_content))
+            return csv_content
+
         except pd.errors.EmptyDataError:
-            print("CSV数据为空")
+            logger.error("CSV数据为空")
             return None
         except Exception as e:
-            print(f"解析CSV数据时出错: {str(e)}")
-            print("问题数据内容:")
-            print("-" * 50)
-            print(response_text[:200] + "..." if len(response_text) > 200 else response_text)
-            print("-" * 50)
+            logger.error(f"解析CSV数据时出错: {str(e)}")
+            logger.error("问题数据内容:")
+            logger.error("-" * 50)
+            logger.error(
+                response_text[:200] + "..."
+                if len(response_text) > 200
+                else response_text
+            )
+            logger.error("-" * 50)
             return None
 
 
-@retry(
-    stop=stop_after_attempt(2),  # 最多重试3次
-    wait=wait_exponential(multiplier=1, min=300, max=600),  # 指数退避，等待时间在300-600秒之间
-    retry=retry_if_exception_type((Timeout, RequestException, httpx.TimeoutException)),  # 只对超时和请求异常进行重试
-    reraise=True  # 重试失败后抛出原始异常
-)
-def call_openai_with_timeout(client, model, messages, timeout=30):
-    """带超时和重试的OpenAI API调用"""
-    try:
-        return client.chat.completions.create(
-            model=model,
-            messages=messages,
-            timeout=timeout
-        )
-    except Exception as e:
-        print(f"API调用出错 (将重试): {str(e)}")
-        raise
-
 def process_foodname(model_name, batch_num, foodname_list, message_list, fn):
-    print(f"Processing {batch_num}...")
-    prompt = '\n'.join(foodname_list)
-    messages = message_list + [{
-        "role": "user",
-        "content": [
-            {"type": "text", "text": prompt},
-        ],
-    }]
-    
+    logger.info(f"Processing {batch_num}...")
+    prompt = "\n".join(foodname_list)
+    messages = message_list + [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": prompt},
+            ],
+        }
+    ]
+
     try:
         # 使用带重试和超时的API调用
         response = call_openai_with_timeout(
             client=client,
             model=model_name,
             messages=messages,
-            timeout=300  # 设置60秒超时
+            timeout=60,  # 设置60秒超时
         )
 
         ans = [batch_num, response.choices[0].message.content]
-        pk_dump(ans, fn)
-        print(f"Complete batch {batch_num}, saved to {fn}")
+        csv_content = parse_csv_from_response(ans[1], len(foodname_list))
+        if csv_content is None:
+            return ''
+        pk_dump(ans, batch_num, fn)
+        logger.info(f"Complete batch {batch_num}, saved to {fn}")
         return ans
     except Exception as e:
-        print(f"Error processing batch {batch_num}: {str(e)}")
+        logger.error(f"Error processing batch {batch_num}: {str(e)}")
         return ""
 
 
+# def create_context(model_name):
+
+#     logger.info(f"Creating context for {model_name}...")
+#     prompt = """[角色与任务]
+# 你将扮演一个顶级的AI美食分类专家。你的唯一任务是接收用户输入的食品/菜品名录，并严格按照以下我们共同建立的、包含十一个维度的分类体系、原则和流程，为每一个条目输出一个分类结果。
+
+# [最终输出格式]
+# 请将所有结果整合为CSV格式（以英文逗号分隔）输出，不包含任何多余的说明文字。第一行为列标题行，后续每一行对应一个菜品。列标题和顺序必须严格如下：
+# 菜品名,第一级别,第二级别,第三级别,第四级别,主要食材种类,烹饪方式,菜系（地域）分类,消费场景,营养建议分类,记忆/推理菜
+# 每个分类项均需填写完整，不能留空。对于无法判定的项，请填写“不适用”，而非留空。
+# 除“主要食材种类”以外分类仅可选取一项最合适的，不能选取复数个分类；除需填写“不适用”时，不得自创名称。对于“主要食材种类”，请选择所有适用的食材，并用“/”分隔。
+
+# [核心分类流程]
+# 收到待分类菜名后，你将启动一个分析流程，为菜品精准画像并填入11列分类表格。
+# 第一步：菜品识别与理解。
+# 第二步：判定“记忆/推理”属性。
+# 第三步：判定“消费场景”。
+# 第四步：判定“菜系”。
+# 第五步：确定“主要食材种类”与“烹饪方式”。
+# 第六步：进行四级层级分类。遵循“分类判定优先级”规则，严格参照下方的[核心四级分类体系字典]来确定第一至第四级别。
+# 第七步：判定“营养建议分类”。
+# 第八步：整合输出为CSV格式。
+
+# [核心四级分类体系字典]
+# 进行层级分类时，请严格参照以下表格中的从属关系和完整名称：
+
+# | 第一级别 | 第二级别 | 第三级别 | 第四级别 (最终精确分类) |
+# | :--- | :--- | :--- | :--- |
+# | A. 富含优质蛋白质的菜品 | A1. 红肉类 | 猪肉 | 里脊 |
+# | | | | 五花肉 |
+# | | | | 排骨 |
+# | | | | 梅花肉 |
+# | | | | 猪蹄/猪脚 |
+# | | | | 猪肘/蹄髈 |
+# | | | | 猪头肉/猪耳 |
+# | | | | 猪颈肉 |
+# | | | | 腿肉 |
+# | | | | 肉片 (当部位不明确或菜品以该形态为核心时使用) |
+# | | | | 肉丝 (当部位不明确或菜品以该形态为核心时使用) |
+# | | | | 肉末/肉馅 (当部位不明确或菜品以该形态为核心时使用) |
+# | | | | 肉丸/肉饼 (当部位不明确或菜品以该形态为核心时使用) |
+# | | | 牛肉 | 牛腩 |
+# | | | | 牛腱 |
+# | | | | 牛里脊/牛柳 |
+# | | | | 牛排 |
+# | | | | 肥牛 |
+# | | | | 牛肉片 (当部位不明确或菜品以该形态为核心时使用) |
+# | | | | 牛肉丝 (当部位不明确或菜品以该形态为核心时使用) |
+# | | | | 牛肉末/馅 (当部位不明确或菜品以该形态为核心时使用) |
+# | | | | 牛肉丸 (当部位不明确或菜品以该形态为核心时使用) |
+# | | | 羊肉 | 羊腿 |
+# | | | | 羊排 |
+# | | | | 羊蝎子 |
+# | | | | 羊肉片 (当部位不明确或菜品以该形态为核心时使用) |
+# | | | | 羊肉串 (当部位不明确或菜品以该形态为核心时使用) |
+# | | | 其他畜肉 | 其他畜肉 |
+# | | A2. 禽肉类 | 鸡肉 | 整鸡 |
+# | | | | 鸡翅 |
+# | | | | 鸡腿 |
+# | | | | 鸡爪/鸡脚 |
+# | | | | 鸡胸 |
+# | | | | 鸡块 (当部位不明确或菜品以该形态为核心时使用) |
+# | | | | 鸡柳/鸡丝 (当部位不明确或菜品以该形态为核心时使用) |
+# | | | | 鸡丁 (当部位不明确或菜品以该形态为核心时使用) |
+# | | | | 鸡米花 (当部位不明确或菜品以该形态为核心时使用) |
+# | | | | 鸡肉丸 (当部位不明确或菜品以该形态为核心时使用) |
+# | | | 鸭肉 | 整鸭 |
+# | | | | 鸭掌 |
+# | | | | 鸭翅 |
+# | | | | 鸭舌 |
+# | | | | 鸭块 (当部位不明确或菜品以该形态为核心时使用) |
+# | | | 鹅肉 | 整鹅 |
+# | | | | 鹅掌 |
+# | | | 其他禽肉 | 其他禽肉 |
+# | | A3. 鱼类 | 高脂肪鱼类 | 高脂肪鱼类 |
+# | | | 低脂肪鱼类 | 低脂肪鱼类 |
+# | | A4. 其他水产类 | 虾 | 整虾 |
+# | | | | 虾仁/虾球 (当部位不明确或菜品以该形态为核心时使用) |
+# | | | | 虾滑 (当部位不明确或菜品以该形态为核心时使用) |
+# | | | 蟹 | 整蟹 |
+# | | | | 蟹黄 |
+# | | | | 蟹肉/蟹粉 (当部位不明确或菜品以该形态为核心时使用) |
+# | | | 贝类 | 蛤/蚬/蛏 |
+# | | | | 螺 |
+# | | | | 扇贝/带子 |
+# | | | | 蚝 |
+# | | | 软体水产 | 鱿鱼/墨鱼 |
+# | | | | 章鱼 |
+# | | | 爬行/两栖类 | 甲鱼/鳖 |
+# | | | | 牛蛙/田鸡 |
+# | | | 海产干货 | 海参 |
+# | | | | 鲍鱼 |
+# | | | | 海蜇 |
+# | | A5. 内脏类 | 畜肉内脏 | 肝（猪肝等） |
+# | | | | 肚（牛肚、猪肚等） |
+# | | | | 肠（肥肠等） |
+# | | | | 腰/肾 |
+# | | | | 心 |
+# | | | | 血制品 |
+# | | | 禽类内脏 | 胗（鸡胗、鸭胗等） |
+# | | | | 肝（鸡肝、鸭肝等） |
+# | | | | 心（鸡心等） |
+# | | | | 血制品（鸭血等） |
+# | | A6. 蛋制品类 | 未处理的蛋 | 鸡蛋 |
+# | | | | 鸭蛋 |
+# | | | | 鹌鹑蛋 |
+# | | | | 鹅蛋 |
+# | | | | 其他禽蛋 |
+# | | | 经过预处理的蛋 | 皮蛋/松花蛋 |
+# | | | | 咸鸭蛋 |
+# | | | | 茶叶蛋 |
+# | | | | 卤蛋 |
+# | | A7. 奶制品类 | 咸味奶/奶酪 | 奶油/黄油 |
+# | | | | 软质奶酪 |
+# | | | | 硬质/半硬质奶酪 |
+# | | A8. 植物蛋白类 | 大豆/豆类 | 大豆/豆类 |
+# | | | 豆制品 | 豆腐 |
+# | | | | 豆干 |
+# | | | | 腐竹/豆皮 |
+# | | | | 素鸡 |
+# | | | 菌菇 | 菌菇 |
+# | B. 以碳水化合物食材为主的菜品 | B1. 精制谷物类 | 精米饭/米粉/米制品 | 米饭 |
+# | | | | 泡饭 |
+# | | | | 饭团 |
+# | | | | 盖浇饭 |
+# | | | | 焖饭 |
+# | | | | 煲仔饭 |
+# | | | | 菜包饭 |
+# | | | | 炒饭 |
+# | | | | 拌饭 |
+# | | | | 粥 |
+# | | | | 米粉 |
+# | | | | 米线 |
+# | | | | 年糕 |
+# | | | 精面粉面食 | 面条 |
+# | | | | 包子 |
+# | | | | 饺子 |
+# | | | | 馄饨 |
+# | | | | 饼 |
+# | | | | 烧饼 |
+# | | | | 馒头 |
+# | | | | 油条 |
+# | | B2. 全谷物/杂粮类 | 全谷物/杂粮饭 | 杂粮饭 |
+# | | | | 杂粮粥 |
+# | | | 全麦/杂粮面食 | 杂粮馒头/窝头 |
+# | | | | 杂粮饼 |
+# | | B3. 高淀粉蔬菜/豆类 | 薯类 | 薯类 |
+# | | | 根茎类 | 根茎类 |
+# | | | 高淀粉豆 | 高淀粉豆 |
+# | C. 以蔬菜/水果为主的菜品 | C1. 蔬菜类 | 深色叶菜 | 深色叶菜 |
+# | | | 浅色叶菜 | 浅色叶菜 |
+# | | | 瓜果/茄果蔬菜 | 瓜果/茄果蔬菜 |
+# | | | 高纤维豆类 | 高纤维豆类 |
+# | | | 葱蒜/洋葱类 | 葱蒜/洋葱类 |
+# | | | 藻类 | 藻类 |
+# | | C2. 水果类 | 水果 | 仁果/核果类 |
+# | | | | 浆果类 |
+# | | | | 柑橘类 |
+# | | | | 热带/亚热带水果 |
+# | | | | 瓜类 |
+# | D. 高脂肪/高能量菜品 | | 油炸类 | 油炸-肉类 |
+# | | | | 油炸-水产 |
+# | | | | 油炸-蔬菜 |
+# | | | | 油炸-豆制品 |
+# | | | | 油炸-面食 |
+# | | | 源自动物脂肪 | 高脂红肉 |
+# | | | | 带皮禽肉 |
+# | | | 富含乳脂 | 奶油/重芝士 |
+# | | | 富含热带植物油 | 椰浆 |
+# | F. 汤羹类 | | 清汤 | 清汤 |
+# | | | 浓汤/奶汤 | 浓汤/奶汤 |
+# | | | 羹 | 羹 |
+# | | | 药膳/滋补汤 | 药膳/滋补汤 |
+# | G. 甜品 | | 烘焙类 | 烘焙类 |
+# | | | 冰品/冻品类 | 冰品/冻品类 |
+# | | | 中式甜汤 | 中式甜汤 |
+# | | | 中式糕团 | 中式糕团 |
+# | H. 饮品 | | 非酒精饮品 | 非酒精饮品 |
+# | | | 酒精饮品 | 啤酒 |
+# | | | | 葡萄酒 |
+# | | | | 中式白酒 |
+# | | | | 黄酒/米酒 |
+# | | | | 其他烈酒 |
+# | | | | 鸡尾酒 |
+
+# [平行标签分类列表]
+
+# [主要食材种类]
+# 米类,面粉或小麦类,玉米类,杂粮类,叶菜类,根茎类,瓜果类,茄果类,菌菇类,大豆或豆类,豆腐或豆干类,豆浆或腐竹类,发酵豆制品,鸡蛋,鸭蛋,鹌鹑蛋,其他禽蛋,猪肉,牛肉,羊肉,其他畜肉,鸡肉,鸭肉,鹅肉,其他禽肉,畜肉内脏,禽类内脏,淡水鱼,海水鱼,虾类,蟹类,贝类,软体类,爬行或两栖类,海产干货,仁果或核果类,浆果类,柑橘类,热带或亚热带水果,瓜类,奶或奶油类,奶酪或芝士类,发酵乳品,坚果或种子类,茶或咖啡或可可类,其他
+
+# [烹饪方式]
+# 炒,爆,烧,焖,卤,烩,蒸,煮,炖,涮,炸,溜,凉拌,烤,煎,熏,焗,腌,醉,焯,汆,其他
+
+# [菜系（地域）分类]
+# 川菜,粤菜,鲁菜,闽菜,苏菜,浙菜,湘菜,徽菜,京菜,本帮菜,东北菜,客家菜,西北菜,云南菜,港式/茶餐厅,台式,家常/不区分菜系,西餐,日料,韩料,东南亚菜
+
+# [消费场景]
+# 家常菜,餐馆菜,宴席菜/大菜,小吃/街头美食,预制菜/工业化食品,其他
+
+# [营养建议分类]
+# 分类名称: 主食/淀粉类/高糖/高油
+# 纳入规则：“或”逻辑。满足“主食/高淀粉”、“高糖”、“高油”任一条件即归入此类。不满足则输出“无”。
+
+# [记忆/推理菜]
+# 推理菜: 见名知菜。
+# 记忆菜: 需背景知识解码。
+
+# [关键判定原则]
+
+# [分类判定优先级]
+# 当一个菜品可以被归入多个第一级别类别时，按以下顺序决定其最终归属：
+# 1. 优先级1：判定是否属于 D. 高脂肪/高能量菜品。
+# 2. 优先级2：判定是否属于 A, B, C. 单一营养素主导的菜品。
+# 3. 优先级3：如果前两者皆不适用，则根据“主食功能判定”原则在A类和B类中选择。
+#     - 主食功能判定原则1：如果菜品通常作为独立主食存在（一碗/一盘即一餐），优先归入 B. 富含碳水化合物的菜品。
+#     - 主食功能判定原则2：如果菜品是需要搭配主食（如米饭）食用的大菜，优先归入 A. 富含优质蛋白质的菜品。
+
+# [特殊条目处理规则]
+# 对于完全无关的输入（如“汽车”），所有11个分类列都统一输出“不适用”。对于食品相关的非菜品条目（如“打豆浆”），在[第一级别]中标注为“(非菜品)”，在[二级分类]中标注具体原因（如“(原材料)”、“(动作/过程)”），并在其他所有列中标注“(不适用)”。
+
+# [输出样例]
+# 菜品名,第一级别,第二级别,第三级别,第四级别,主要食材种类,烹饪方式,菜系（地域）分类,消费场景,营养建议分类,记忆/推理菜
+# 西红柿炒蛋,A. 富含优质蛋白质的菜品,A6. 蛋制品类,未处理的蛋,炒鸡蛋,鸡蛋,炒,家常/不区分菜系,家常菜,主食/淀粉类/高糖/高油,推理菜
+# 麻婆豆腐,A. 富含优质蛋白质的菜品,A8. 植物蛋白类,豆制品,烧豆制品,豆腐/豆干类,烧,川菜,家常菜,主食/淀粉类/高糖/高油,记忆菜"""
+#     message_list = [
+#         {
+#             "role": "user",
+#             "content": [
+#                 {"type": "text", "text": prompt},
+#             ],
+#         }
+#     ]
+#     try:
+#         response = client.chat.completions.create(
+#             model=model_name,
+#             messages=message_list,
+#         )
+#         logger.info(f'create cpntext result: {response.choices[0].message.content}')
+#         message_list.append(
+#             {
+#                 "role": response.choices[0].message.role,
+#                 "content": [
+#                     {"type": "text", "text": response.choices[0].message.content},
+#                 ],
+#             }
+#         )
+#         logger.info("Context create complete")
+#         return message_list
+#     except Exception as e:
+#         logger.error(f"Error occurred while creating context: {e}")
+#         return ""
+
 def create_context(model_name):
 
-    print(f"Creating context for {model_name}...")
-    prompt = """你好，请你扮演一个美食专家AI。我需要你为我输入的菜品/食品名录进行分类。请严格遵守以下我们共同建立的、包含七个维度的分类体系和所有规则。
+    logger.info(f"Creating context for {model_name}...")
+    prompt = """[角色与任务]
+你将扮演一个顶级的AI美食分类专家。你的唯一任务是接收用户输入的食品/菜品名录，并严格按照以下我们共同建立的、包含十一个维度的分类体系、原则和流程，为每一个条目输出一个分类结果。
 
-## 一、最终输出格式
+[最终输出格式]
+请将所有结果整合为CSV格式（以英文逗号分隔）输出，不包含任何多余的说明文字。第一行为列标题行，后续每一行对应一个菜品。列标题和顺序必须严格如下：
+菜品名,第一级别,第二级别,第三级别,第四级别,主要食材种类,烹饪方式,菜系（地域）分类,消费场景,营养建议分类,记忆/推理菜
+每个分类项均需填写完整，不能留空。对于无法判定的项，请填写“不适用”，而非留空。
+除“主要食材种类”以外分类仅可选取一项最合适的，不能选取复数个分类；除需填写“不适用”时，不得自创名称。对于“主要食材种类”，请选择所有适用的食材，并用“/”分隔。
 
-请为我输入的每一个菜品/食品，都输出一个包含以下七个标签的分类结果，并使用csv格式呈现：(菜名/食品名，标签1，标签2...标签7)
+[核心分类流程]
+收到待分类菜名后，你将启动一个分析流程，为菜品精准画像并填入11列分类表格。
+第一步：菜品识别与理解。
+第二步：判定“记忆/推理”属性。
+第三步：判定“消费场景”。
+第四步：判定“菜系”。
+第五步：确定“主要食材种类”与“烹饪方式”。
+第六步：进行四级层级分类。遵循“分类判定优先级”规则，严格参照下方的[核心四级分类体系字典]来确定第一至第四级别。
+第七步：判定“营养建议分类”。
+第八步：整合输出为CSV格式。
 
-1.  `一级分类`
-2.  `二级分类`
-3.  `主要食材种类`
-4.  `菜系（地域）分类`
-5.  `烹饪方式`
-6.  `消费场景`
-7.  `营养建议分类`
+[核心四级分类体系字典]
+进行层级分类时，请严格参照以下表格中的从属关系和完整名称(括号中的内容不需要输出)：
 
-## 二、详细分类标准与列表
+| 第一级别 | 第二级别 | 第三级别 | 第四级别 (最终精确分类) |
+| :--- | :--- | :--- | :--- |
+| A. 富含优质蛋白质的菜品 | A1. 红肉类 | 猪肉 | 里脊 |
+| | | | 五花肉 |
+| | | | 排骨 |
+| | | | 梅花肉 |
+| | | | 猪蹄/猪脚 |
+| | | | 猪肘/蹄髈 |
+| | | | 猪头肉/猪耳 |
+| | | | 猪颈肉 |
+| | | | 腿肉 |
+| | | | 肉片 (当部位不明确或菜品以该形态为核心时使用) |
+| | | | 肉丝 (当部位不明确或菜品以该形态为核心时使用) |
+| | | | 肉末/肉馅 (当部位不明确或菜品以该形态为核心时使用) |
+| | | | 肉丸/肉饼 (当部位不明确或菜品以该形态为核心时使用) |
+| | | 牛肉 | 牛腩 |
+| | | | 牛腱 |
+| | | | 牛里脊/牛柳 |
+| | | | 牛排 |
+| | | | 肥牛 |
+| | | | 牛肉片 (当部位不明确或菜品以该形态为核心时使用) |
+| | | | 牛肉丝 (当部位不明确或菜品以该形态为核心时使用) |
+| | | | 牛肉末/馅 (当部位不明确或菜品以该形态为核心时使用) |
+| | | | 牛肉丸 (当部位不明确或菜品以该形态为核心时使用) |
+| | | 羊肉 | 羊腿 |
+| | | | 羊排 |
+| | | | 羊蝎子 |
+| | | | 羊肉片 (当部位不明确或菜品以该形态为核心时使用) |
+| | | | 羊肉串 (当部位不明确或菜品以该形态为核心时使用) |
+| | | 其他畜肉 | 其他畜肉 |
+| | A2. 禽肉类 | 鸡肉 | 整鸡 |
+| | | | 鸡翅 |
+| | | | 鸡腿 |
+| | | | 鸡爪/鸡脚 |
+| | | | 鸡胸 |
+| | | | 鸡块 (当部位不明确或菜品以该形态为核心时使用) |
+| | | | 鸡柳/鸡丝 (当部位不明确或菜品以该形态为核心时使用) |
+| | | | 鸡丁 (当部位不明确或菜品以该形态为核心时使用) |
+| | | | 鸡米花 (当部位不明确或菜品以该形态为核心时使用) |
+| | | | 鸡肉丸 (当部位不明确或菜品以该形态为核心时使用) |
+| | | 鸭肉 | 整鸭 |
+| | | | 鸭掌 |
+| | | | 鸭翅 |
+| | | | 鸭舌 |
+| | | | 鸭块 (当部位不明确或菜品以该形态为核心时使用) |
+| | | 鹅肉 | 整鹅 |
+| | | | 鹅掌 |
+| | | 其他禽肉 | 其他禽肉 |
+| | A3. 鱼类 | 高脂肪鱼类 | 高脂肪鱼类 |
+| | | 低脂肪鱼类 | 低脂肪鱼类 |
+| | A4. 其他水产类 | 虾 | 整虾 |
+| | | | 虾仁/虾球 (当部位不明确或菜品以该形态为核心时使用) |
+| | | | 虾滑 (当部位不明确或菜品以该形态为核心时使用) |
+| | | 蟹 | 整蟹 |
+| | | | 蟹黄 |
+| | | | 蟹肉/蟹粉 (当部位不明确或菜品以该形态为核心时使用) |
+| | | 贝类 | 蛤/蚬/蛏 |
+| | | | 螺 |
+| | | | 扇贝/带子 |
+| | | | 蚝 |
+| | | 软体水产 | 鱿鱼/墨鱼 |
+| | | | 章鱼 |
+| | | 爬行/两栖类 | 甲鱼/鳖 |
+| | | | 牛蛙/田鸡 |
+| | | 海产干货 | 海参 |
+| | | | 鲍鱼 |
+| | | | 海蜇 |
+| | A5. 内脏类 | 畜肉内脏 | 肝（猪肝等） |
+| | | | 肚（牛肚、猪肚等） |
+| | | | 肠（肥肠等） |
+| | | | 腰/肾 |
+| | | | 心 |
+| | | | 血制品 |
+| | | 禽类内脏 | 胗（鸡胗、鸭胗等） |
+| | | | 肝（鸡肝、鸭肝等） |
+| | | | 心（鸡心等） |
+| | | | 血制品（鸭血等） |
+| | A6. 蛋制品类 | 未处理的蛋 | 鸡蛋 |
+| | | | 鸭蛋 |
+| | | | 鹌鹑蛋 |
+| | | | 鹅蛋 |
+| | | | 其他禽蛋 |
+| | | 经过预处理的蛋 | 皮蛋/松花蛋 |
+| | | | 咸鸭蛋 |
+| | | | 茶叶蛋 |
+| | | | 卤蛋 |
+| | A7. 奶制品类 | 咸味奶/奶酪 | 奶油/黄油 |
+| | | | 软质奶酪 |
+| | | | 硬质/半硬质奶酪 |
+| | A8. 植物蛋白类 | 大豆/豆类 | 大豆/豆类 |
+| | | 豆制品 | 豆腐 |
+| | | | 豆干 |
+| | | | 腐竹/豆皮 |
+| | | | 素鸡 |
+| | | 菌菇 | 菌菇 |
+| B. 以碳水化合物食材为主的菜品 | B1. 精制谷物类 | 精米饭/米粉/米制品 | 米饭 |
+| | | | 泡饭 |
+| | | | 饭团 |
+| | | | 盖浇饭 |
+| | | | 焖饭 |
+| | | | 煲仔饭 |
+| | | | 菜包饭 |
+| | | | 炒饭 |
+| | | | 拌饭 |
+| | | | 粥 |
+| | | | 米粉 |
+| | | | 米线 |
+| | | | 年糕 |
+| | | 精面粉面食 | 面条 |
+| | | | 包子 |
+| | | | 饺子 |
+| | | | 馄饨 |
+| | | | 饼 |
+| | | | 烧饼 |
+| | | | 馒头 |
+| | | | 油条 |
+| | | | 面包/吐司 |
+| | B2. 全谷物/杂粮类 | 全谷物/杂粮饭 | 杂粮饭 |
+| | | | 杂粮粥 |
+| | | 全麦/杂粮面食 | 杂粮馒头/窝头 |
+| | | | 杂粮饼 |
+| | B3. 高淀粉蔬菜/豆类 | 薯类 | 薯类 |
+| | | 根茎类 | 根茎类 |
+| | | 高淀粉豆 | 高淀粉豆 |
+| C. 以蔬菜/水果为主的菜品 | C1. 蔬菜类 | 深色叶菜 | 深色叶菜 |
+| | | 浅色叶菜 | 浅色叶菜 |
+| | | 瓜果/茄果蔬菜 | 瓜果/茄果蔬菜 |
+| | | 高纤维豆类 | 高纤维豆类 |
+| | | 葱蒜/洋葱类 | 葱蒜/洋葱类 |
+| | | 藻类 | 藻类 |
+| | C2. 水果类 | 水果 | 仁果/核果类 |
+| | | | 浆果类 |
+| | | | 柑橘类 |
+| | | | 热带/亚热带水果 |
+| | | | 瓜类 |
+| D. 高脂肪/高能量菜品 | D. 高脂肪/高能量菜品 | 油炸类 | 油炸-肉类 |
+| | | | 油炸-水产 |
+| | | | 油炸-蔬菜 |
+| | | | 油炸-豆制品 |
+| | | | 油炸-面食 |
+| | | 源自动物脂肪 | 高脂红肉 |
+| | | | 带皮禽肉 |
+| | | 富含乳脂 | 奶油/重芝士 |
+| | | 富含热带植物油 | 椰浆 |
+| F. 汤羹类 | F. 汤羹类 | 清汤 | 清汤 |
+| | | 浓汤/奶汤 | 浓汤/奶汤 |
+| | | 羹 | 羹 |
+| | | 药膳/滋补汤 | 药膳/滋补汤 |
+| G. 甜品 | G. 甜品 | 烘焙类 | 烘焙类 |
+| | | 冰品/冻品类 | 冰品/冻品类 |
+| | | 中式甜汤 | 中式甜汤 |
+| | | 中式糕团 | 中式糕团 |
+| H. 饮品 | H. 饮品 | 非酒精饮品 | 非酒精饮品 |
+| | | 酒精饮品 | 啤酒 |
+| | | | 葡萄酒 |
+| | | | 中式白酒 |
+| | | | 黄酒/米酒 |
+| | | | 其他烈酒 |
+| | | | 鸡尾酒 |
 
-### 1. 一级分类 (按功能与形态)
-这是菜品在餐桌上的核心功能分类。
+[平行标签分类列表]
 
-* 主食
-* 纯素菜
-* 半荤半素
-* 纯荤菜
-* 汤羹
-* 点心/小吃
-* 甜品
-* 饮品
-* 凉菜/前菜
+[主要食材种类]
+米类,面粉或小麦类,玉米类,杂粮类,叶菜类,根茎类,瓜果类,茄果类,菌菇类,大豆或豆类,豆腐或豆干类,豆浆或腐竹类,发酵豆制品,鸡蛋,鸭蛋,鹌鹑蛋,其他禽蛋,猪肉,牛肉,羊肉,其他畜肉,鸡肉,鸭肉,鹅肉,其他禽肉,畜肉内脏,禽类内脏,淡水鱼,海水鱼,虾类,蟹类,贝类,软体类,爬行或两栖类,海产干货,仁果或核果类,浆果类,柑橘类,热带或亚热带水果,瓜类,奶或奶油类,奶酪或芝士类,发酵乳品,坚果或种子类,茶或咖啡或可可类,藻类,鹅蛋,葱蒜或洋葱类,其他
 
-### 2. 二级分类 (按具体食材或形态)
-此分类根据“一级分类”的不同而变化，具体规则如下：
+[烹饪方式]
+炒,爆,烧,焖,卤,烩,蒸,煮,炖,涮,炸,溜,凉拌,烤,煎,熏,焗,腌,醉,焯,汆,其他
 
-* **对于【纯荤菜】/【半荤半素】**: 按主要荤菜食材的精确类别划分（见下文“主要食材种类”的细化列表，如“猪肉”、“鸡肉”等）。
-* **对于【纯素菜】**: 按主要素菜食材的类别划分（如“叶菜类”、“豆制品类”等）。
-* **对于【主食】**: 按主食的约定俗成的具体品类划分。
-* **对于【甜品】**: 按甜品的约定俗成的具体品类划分。
-* **对于【汤羹】**: 按汤的形态质地划分（清汤、浓汤、羹）。
-* **对于【饮品】**: 按饮品基底划分（茶饮、咖啡等）。
-* **对于【凉菜/前菜】**: 按主要食材的荤素划分（素食前菜、肉食前菜、水产前菜）。
+[菜系（地域）分类]
+川菜,粤菜,鲁菜,闽菜,苏菜,浙菜,湘菜,徽菜,京菜,本帮菜,东北菜,客家菜,西北菜,云南菜,港式/茶餐厅,台式,家常/不区分菜系,西餐,日料,韩料,东南亚菜
 
-### 3. 主要食材种类 (按食材大类)
-这是对菜品核心原材料的归属分类。
+[消费场景]
+家常菜,餐馆菜,宴席菜/大菜,小吃/街头美食,预制菜/工业化食品,其他
 
-**规则：** 对于畜肉和禽肉类菜品，此分类应与【二级分类】保持一致，使用最精确的分类。例如，“红烧肉”的二级分类和主要食材种类都应为“猪肉”。
+[营养建议分类]
+分类名称: 主食/淀粉类/高糖/高油
+纳入规则：“或”逻辑。满足“主食/高淀粉”、“高糖”、“高油”任一条件即归入此类。不满足则输出“无”。
 
-* 谷物类
-* 蔬菜类
-* 菌菇类
-* 豆制品类
-* 蛋类
-* **猪肉**
-* **牛肉**
-* **羊肉**
-* **其他畜肉**
-* **鸡肉**
-* **鸭肉**
-* **鹅肉**
-* **其他禽肉**
-* 内脏类
-* 鱼类
-* 虾蟹类
-* 贝类
-* 其他水产类
-* 水果类
-* 乳制品类
-* 坚果/种子类
-* 茶/咖啡/可可类
+[记忆/推理菜]
+推理菜: 见名知菜。
+记忆菜: 需背景知识解码。
 
-### 4. 菜系（地域）分类
-这是菜品的文化与风味源流标签。
+[关键判定原则]
 
-* 川菜
-* 粤菜
-* 鲁菜
-* 闽菜
-* 苏菜
-* 浙菜
-* 湘菜
-* 徽菜
-* 京菜
-* 本帮菜
-* 东北菜
-* 客家菜
-* 西北菜
-* 云南菜
-* 港式/茶餐厅
-* 台式
-* 家常/不区分菜系
-* 西餐
-* 日料
-* 韩料
-* 东南亚菜
+[分类判定优先级]
+当一个菜品可以被归入多个第一级别类别时，按以下顺序决定其最终归属：
+1. 优先级1：判定是否属于 D. 高脂肪/高能量菜品。
+2. 优先级2：判定是否属于 A, B, C. 单一营养素主导的菜品。
+3. 优先级3：如果前两者皆不适用，则根据“主食功能判定”原则在A类和B类中选择。
+    - 主食功能判定原则1：如果菜品通常作为独立主食存在（一碗/一盘即一餐），优先归入 B. 富含碳水化合物的菜品。
+    - 主食功能判定原则2：如果菜品是需要搭配主食（如米饭）食用的大菜，优先归入 A. 富含优质蛋白质的菜品。
 
-### 5. 烹饪方式
-这是菜品的主要制作工艺标签。
+[特殊条目处理规则]
+对于完全无关的输入（如“汽车”），所有11个分类列都统一输出“不适用”。对于食品相关的非菜品条目（如“打豆浆”），在[第一级别]中标注为“(非菜品)”，在[二级分类]中标注具体原因（如“(原材料)”、“(动作/过程)”），并在其他所有列中标注“(不适用)”。
 
-* 炒
-* 爆
-* 烧
-* 焖
-* 卤
-* 烩
-* 蒸
-* 煮
-* 炖
-* 涮
-* 炸
-* 溜
-* 凉拌
-* 烤
-* 煎
-* 熏
-* 焗
-* 腌
-* 醉
-* 焯
-* 汆
-
-### 6. 消费场景
-这是菜品的社会属性与规格分类。
-
-* 家常菜
-* 餐馆菜
-* 宴席菜/大菜
-* 小吃/街头美食
-* 预制菜/工业化食品
-
-### 7. 营养建议分类
-这是一个基于健康建议的“高能预警”分类。
-
-* **分类名称**: `主食/淀粉类/高糖/高油`
-* **纳入规则（核心）**: **“或”逻辑**。任何菜品/食品，只要满足以下四个条件中的**至少一个**，就应被归入此类：
-    1.  属于【一级分类】中的**主食**，或主要食材为高**淀粉**类（如土豆、红薯）。
-    2.  在烹饪中添加了大量糖或含糖酱汁，属于**高糖**。
-    3.  使用油炸、大量油滑炒等烹饪方式，或食材本身脂肪含量高，属于**高油**。
-* 如果不满足以上任何一个条件，则输出“**无**”。
-
-### 三、特殊条目处理规则
-
-* 对于非菜品/食品的输入（如“打豆浆”、“包饺子”等动作；“面包粉”等原材料；“面包超人”等无关内容），请在分类列中标注为“(非菜品)”、“(原材料)”等，并在其他列中标注“(不适用)”。"""
+[输出样例]
+菜品名,第一级别,第二级别,第三级别,第四级别,主要食材种类,烹饪方式,菜系（地域）分类,消费场景,营养建议分类,记忆/推理菜
+西红柿炒蛋,A. 富含优质蛋白质的菜品,A6. 蛋制品类,未处理的蛋,炒鸡蛋,鸡蛋,炒,家常/不区分菜系,家常菜,主食/淀粉类/高糖/高油,推理菜
+麻婆豆腐,A. 富含优质蛋白质的菜品,A8. 植物蛋白类,豆制品,烧豆制品,豆腐/豆干类,烧,川菜,家常菜,主食/淀粉类/高糖/高油,记忆菜"""
     message_list = [
         {
             "role": "user",
@@ -349,149 +678,187 @@ def create_context(model_name):
             ],
         }
     ]
-    try:
-        response = client.chat.completions.create(
-            model=model_name,
-            messages=message_list,
-        )
-        print(response)
-        message_list.append(
-            {
-                "role": response.choices[0].message.role,
-                "content": [
-                    {"type": "text", "text": response.choices[0].message.content},
-                ],
-            }
-        )
-        print("Context create complete")
-        return message_list
-    except Exception as e:
-        print(f"Error occurred while creating context: {e}")
-        return ""
-
+    message_list.append(
+        {
+            "role": 'assistant',
+            "content": [
+                {"type": "text", "text": """菜品名,第一级别,第二级别,第三级别,第四级别,主要食材种类,烹饪方式,菜系（地域）分类,消费场景,营养建议分类,记忆/推理菜
+扬州炒饭,B. 以碳水化合物食材为主的菜品,B1. 精制谷物类,精米饭/米粉/米制品,炒饭,米类/虾类/猪肉/鸡蛋,炒,苏菜,餐馆菜,主食/淀粉类/高糖/高油,记忆菜
+东坡肉,D. 高脂肪/高能量菜品,D. 高脂肪/高能量菜品,源自动物脂肪,高脂红肉,猪肉,烧,浙菜,宴席菜/大菜,主食/淀粉类/高糖/高油,记忆菜
+鱼香肉丝,A. 富含优质蛋白质的菜品,A1. 红肉类,猪肉,肉丝,猪肉/根茎类/菌菇类,炒,川菜,家常菜,主食/淀粉类/高糖/高油,记忆菜
+开水白菜,F. 汤羹类,F. 汤羹类,清汤,清汤,叶菜类/鸡肉/鸭肉,炖,川菜,宴席菜/大菜,无,记忆菜
+盐水鸭,A. 富含优质蛋白质的菜品,A2. 禽肉类,鸭肉,整鸭,鸭肉,煮,苏菜,餐馆菜,无,记忆菜"""},
+            ],
+        }
+    )
+    logger.info("Context create complete")
+    return message_list
 
 if __name__ == "__main__":
-    os.environ["OPENAI_BASE_URL"] = "https://api.qingyuntop.top/v1"
-    os.environ["OPENAI_API_KEY"] = "sk-mFtES1U9ZQqCpLuoODW1cH6XyDOZEMcfKzBNSq9ROBEBV5YW"
+    os.environ["OPENAI_BASE_URL"] = API_URL
+    os.environ["OPENAI_API_KEY"] = API_KEY_DISCOUNT
 
+    version = 'V100R25C10'
     client = OpenAI()
-    file_name = "food_name3"
-    FD = pd.read_csv(f"/date0/crwu/classification/data/{file_name}.csv")
-    fd_target = Path(f"/date0/crwu/classification/outputs_by_type_{file_name}")
-
+    file_name = "food_name_all"
+    FD = pd.read_csv(f"/date0/crwu/food_name/data/classification/{file_name}.csv")
+    fd_target = Path(
+        f"/date0/crwu/food_name/data/classification/outputs_by_type_{file_name}_{version}"
+    )
+    os.makedirs(fd_target, exist_ok=True)
     FD["outfn"] = FD["菜名"].apply(lambda s: fd_target / f"{s}.pk")
 
     # prepare for mapping
     FD_ = FD[FD["outfn"].apply(lambda fn: not os.path.exists(fn))]
     # inputs = FD_[["菜名", "outfn"]].values  # convert to tuple for map function
-    print(f"{len(FD_)} files remaining for processing...")
 
     model_name = "gemini-2.5-pro"  # "gemini-2.5-flash-preview-04-17-nothinking" #"gemini-2.5-pro" #"qwen-vl-max-latest"
 
     t_start = time.time()
 
-    batch_size = 50
-    batch_list = [FD["菜名"][i:i + batch_size].tolist() for i in range(0, len(FD), batch_size)]
+    
+    food_name_list = FD_["菜名"].tolist()
+    # random.shuffle(food_name_list)
+    test_num = 30000
+    food_name_list = food_name_list[:test_num]
+    
+    logger.info(f"{len(food_name_list)} food names remaining for processing...")
+    
+    
+    batch_size = 5
+    batch_list = [
+        food_name_list[i : i + batch_size] for i in range(0, len(food_name_list), batch_size)
+    ]
     unfinished_batch_num_list = get_unfinished_tasks(fd_target, len(batch_list))
     unfinished_batch_list = [batch_list[i] for i in unfinished_batch_num_list]
-    print(f"{len(unfinished_batch_list)} batches remaining for processing...")
-    
-    failed_batches = []    
-    if unfinished_batch_list:
+    logger.info(f"{len(unfinished_batch_list)} batches remaining for processing...")
+    # test_num = 10
+    # unfinished_batch_list=unfinished_batch_list[:test_num]
+    failed_batches = []
+    while unfinished_batch_num_list:
+        failed_batches = []
         message_list = create_context(model_name)
 
         create_context_time = time.time() - t_start
-        print(f"Context creation time: {create_context_time:.2f} seconds")
-        
+        logger.info(f"Context creation time: {create_context_time:.2f} seconds")
+
         with Pool(150) as pool:
             # 用于存储所有异步任务
             async_results = []
 
-            for batch_num, foodname_list in tqdm(zip(unfinished_batch_num_list, unfinished_batch_list)):
-                print(f"Processing batch {batch_num} with {len(foodname_list)} items...")
-                outfn = f'{batch_num}.pk'
+            for batch_num, foodname_list in tqdm(
+                zip(unfinished_batch_num_list, unfinished_batch_list)
+            ):
+                logger.info(
+                    f"Processing batch {batch_num} with {len(foodname_list)} items..."
+                )
+                outfn = f"{batch_num}.pk"
                 # 存储异步任务结果
                 result = pool.apply_async(
-                    func=process_foodname, 
-                    args=(model_name, batch_num, foodname_list, message_list, fd_target/outfn)
+                    func=process_foodname,
+                    args=(
+                        model_name,
+                        batch_num,
+                        foodname_list,
+                        message_list,
+                        fd_target,
+                    ),
                 )
                 async_results.append(result)
                 # break
-                
+
             # 等待所有任务完成并获取结果
-            print("\n等待所有异步任务完成...")
+            logger.info("\n等待所有异步任务完成...")
             for i, async_result in enumerate(tqdm(async_results)):
                 try:
                     result = async_result.get(timeout=300)  # 300秒超时
                     if not result:  # 如果返回空字符串，说明处理失败
                         failed_batches.append(unfinished_batch_num_list[i])
                 except Exception as e:
-                    print(f"Batch {unfinished_batch_num_list[i]} failed: {str(e)}")
+                    logger.info(f"Batch {unfinished_batch_num_list[i]} failed: {str(e)}")
                     failed_batches.append(unfinished_batch_num_list[i])
-            
+            unfinished_batch_num_list = failed_batches
+
             # 等待所有进程完成
             pool.close()
             pool.join()
-        
-        print("\n所有异步任务已完成...")
+
+        logger.info("\n所有异步任务已完成...")
 
     # 从pk文件中读取并合并结果
-    print("\n开始合并结果...")
+    logger.info("\n开始合并结果...")
     all_results = []
     pk_files = list(fd_target.glob("*.pk"))
-    print(f"\n开始处理 {len(pk_files)} 个pk文件...")
-    
+    logger.info(f"\n开始处理 {len(pk_files)} 个pk文件...")
+
     fail_pk_files = []
     for pk_file in tqdm(pk_files):
         try:
-            with open(pk_file, 'rb') as f:
+            with open(pk_file, "rb") as f:
                 data = pk.load(f)
                 if isinstance(data, list) and len(data) == 2:
                     batch_num, response_text = data
                     # 解析CSV数据
-                    df = parse_csv_from_response(response_text, batch_size)
-                    if df is not None:
-                        all_results.append((batch_num, df))
+                    # df = parse_csv_from_response(response_text, batch_size)
+                    csv_text = parse_csv_from_response(response_text, batch_size)
+                    # print(df)
+                    if csv_text is not None:
+                        all_results.append((batch_num, csv_text))
                     else:
-                        print(f"文件 {pk_file} 中未能解析出有效的DataFrame")
+                        logger.error(f"文件 {pk_file} 中未能解析出有效的DataFrame")
                         fail_pk_files.append(pk_file)
         except Exception as e:
-            print(f"处理文件 {pk_file} 时出错: {str(e)}")
+            logger.error(f"处理文件 {pk_file} 时出错: {str(e)}")
             fail_pk_files.append(pk_file)
         # break
-    
-    # # 合并所有DataFrame
-    # if all_results:
-    #     print(f"\n成功解析 {len(all_results)} 个结果文件")
-    #     # 按batch_num排序
-    #     all_results.sort(key=lambda x: x[0])
-    #     # 提取所有DataFrame并合并
-    #     all_df = pd.concat([df for _, df in all_results], ignore_index=True)
-        
-    #     # 保存合并后的结果
-    #     output_path = fd_target / "merged_results.csv"
-    #     all_df.to_csv(output_path, index=False, encoding='utf-8')
-    #     print(f"保存合并结果到: {output_path}")
-    #     print(f"总计处理了 {len(all_df)} 条数据")
-    # else:
-    #     print("没有找到有效的数据可以合并")
-        
+
+    # 合并所有DataFrame
+    if all_results:
+        print(f"\n成功解析 {len(all_results)} 个结果文件")
+        # 按batch_num排序
+        all_results.sort(key=lambda x: x[0])
+        # 提取所有DataFrame并合并
+        # all_df = pd.concat([df for _, df in all_results], ignore_index=True)
+
+        # 保存合并后的结果
+        output_path = fd_target / "merged_results.csv"
+        output_path2 = fd_target / "merged_results_formatted.csv"
+        if os.path.exists(output_path):
+            os.remove(output_path)
+        with open(output_path, 'a') as f:
+            f.writelines('菜品名,第一级别,第二级别,第三级别,第四级别,主要食材种类,烹饪方式,菜系（地域）分类,消费场景,营养建议分类,记忆/推理菜\n')
+        # all_df.to_csv(output_path, index=False, encoding='utf-8')
+        line_num = 0
+        for _, csv_text in all_results:
+            with open(output_path, 'a') as f:
+                for line in csv_text.splitlines():
+                    f.writelines(line+'\n')
+                    line_num +=1
+        format_csv_to_aligned_columns(output_path, output_path2)
+        print(f"保存合并结果到: {output_path2}")
+        print(f"总计处理了 {line_num} 条数据")
+    else:
+        print("没有找到有效的数据可以合并")
+
     # # 删除临时文件（可选）
     # for pk_file in pk_files:
     #     pk_file.unlink()
 
     t_end = time.time()
     t = t_end - t_start
-    
-    print("=== 执行统计 ===")
-    print(f"* 待处理批次数: {len(unfinished_batch_list)}")
+
+    logger.info("=== 执行统计 ===")
+    logger.info(f"* 待处理批次数: {len(unfinished_batch_list)}")
     if len(failed_batches) > 0:
-        print(f"* 失败批次数: {len(failed_batches)}")
-        print(f"* 失败批次编号: {failed_batches}")
-        
-    print(f"* 待解析文件数: {len(pk_files)}")
-    print(f"* 成功解析文件数: {len(all_results)}")
-    print(f"* 失败解析文件数: {len(fail_pk_files)}")
-    print(f"* 失败解析文件: {fail_pk_files}")
-    print(f"* 处理数据条数: {len(all_df) if 'all_df' in locals() else 0}")
-    print(f"* 总执行时间: {t:.2f} 秒")
+        logger.error(f"* 失败批次数: {len(failed_batches)}")
+        logger.error(f"* 失败批次编号: {failed_batches}")
+
+    logger.info(f"* 待解析文件数: {len(pk_files)}")
+    logger.info(f"* 成功解析文件数: {len(all_results)}")
+    logger.error(f"* 失败解析文件数: {len(fail_pk_files)}")
+    logger.error(f"* 失败解析文件: {fail_pk_files}")
+    logger.info(f"* 处理数据条数: {len(all_df) if 'all_df' in locals() else 0}")
+    logger.info(f"* 总执行时间: {t:.2f} 秒")
+    for fail_file in fail_pk_files:
+        # os.remove(fail_file)
+        logger.info(f"删除失败文件: {fail_file}")

@@ -103,7 +103,7 @@ def main():
         "--model_name", type=str, default="qwen2.5-vl-72b-instruct", help="模型名称"
     )
     parser.add_argument(
-        "--eval_only", type=bool, default=False, help="是否仅评估打分，不进行图片推理"
+        "--eval_only", type=bool, default=False, help="是否仅评估打分, 不进行图片推理"
     )
     parser.add_argument(
         "--eval_input", type=str, default="", help="仅评估打分场景下输入的excel路径"
@@ -146,7 +146,7 @@ def main():
             args.shuffle,
         )
         eval_end_time = time.time()
-        logger.info(f"模型评估完成，耗时 {eval_end_time - start_time:.2f} 秒")
+        logger.info(f"模型评估完成, 耗时 {eval_end_time - start_time:.2f} 秒")
 
         # 获取最新的评估结果文件
         data_file = get_latest_file(EVAL_RES_OUTPUT_PATH)
@@ -203,7 +203,7 @@ def main():
 
         logger.info(f"第 {i+1} 次评分所有批处理完成")
         scoring_end_time = time.time()
-        logger.info(f"评分完成，耗时 {scoring_end_time - eval_end_time:.2f} 秒")
+        logger.info(f"评分完成, 耗时 {scoring_end_time - eval_end_time:.2f} 秒")
 
         # 合并结果
         merge_cmd = [
@@ -215,7 +215,7 @@ def main():
         subprocess.run(merge_cmd, check=True)
 
     total_end_time = time.time()
-    logger.info(f"所有评分完成，耗时 {total_end_time - start_time:.2f} 秒")
+    logger.info(f"所有评分完成, 耗时 {total_end_time - start_time:.2f} 秒")
 
 
 if __name__ == "__main__":

@@ -18,6 +18,8 @@ def get_function_location():
 PROJECT_ROOT = os.path.dirname(os.path.dirname(get_function_location()))
 EVAL_DATA_IMAGE_ROOT = os.path.join(PROJECT_ROOT, 'data/evaluation/Evaluation_data_0528')
 EVAL_DATA_EXCEL_PATH = os.path.join(PROJECT_ROOT, 'data/evaluation/test_data_excel/Evaluation_Data_0530_comments_by_hht.xlsx')
+# EVAL_DATA_DIMENSION_EXCEL_PATH = os.path.join(PROJECT_ROOT, 'data/evaluation/test_data_excel/Evaluation_Data_0530_comments_by_hht_dimension.xlsx')
+EVAL_DATA_DIMENSION_EXCEL_PATH = os.path.join(PROJECT_ROOT, 'data/evaluation/test_data_excel/food_name_database_V100R25C10.xlsx')
 EVAL_RES_OUTPUT_PATH = os.path.join(PROJECT_ROOT, 'data/evaluation/eval_res_of_llm')
 LLM_SCORE_OUTPUT_PATH = os.path.join(PROJECT_ROOT, 'data/evaluation/llm_score')
 
