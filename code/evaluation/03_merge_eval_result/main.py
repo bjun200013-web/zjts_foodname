@@ -109,7 +109,7 @@ if __name__ == "__main__":
     predicted_dishes = batch_df["model_prediction"]
 
     models = [
-        # GEMINI_MODEL_NAME,
+        GEMINI_MODEL_NAME,
         GPT_MODEL_NAME,
         CLAUDE_MODEL_NAME,
     ]

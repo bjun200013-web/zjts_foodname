@@ -1,4 +1,4 @@
-﻿sample_index,ground_truth_answer_true,foodname_pred,model_prediction,retrieved_items,explanations,explanations_rag,image_path
+﻿sample_index,ground_truth_answer,foodname_pred,model_prediction,retrieved_items,explanations,explanations_rag,image_path
 0,包子,蟹黄汤包,包子,"[['棋子烧饼' '饼_棋子烧饼_棋子烧饼_26' '66.71528625488281']
  ['驴肉火烧' '饼_驴肉火烧_火烧_196' '80.5435791015625']
  ['烤冷面' '面条_烤冷面_烤冷面_29' '83.4976806640625']

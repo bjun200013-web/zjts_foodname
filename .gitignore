@@ -1,10 +1,15 @@
+# ignore logs
 /logs/eval_res_of_llm/*
 /logs/llm_score/*
+*.log
+
+# ignore temp data files
 *.pk
 /data/evaluation/eval_res_of_llm/*
 /data/evaluation/llm_score/*
-/data/classification/output*/*.csv
-*.log
+/data/classification/**/*.csv
+
+# ignore .pyc
 *.pyc
 __pycache__/
 *.py[cod]

@@ -25,6 +25,7 @@ LLM_SCORE_OUTPUT_PATH = os.path.join(PROJECT_ROOT, 'data/evaluation/llm_score')
 
 GPT_MODEL_NAME =  "gpt-4o-2024-11-20"
 GEMINI_MODEL_NAME = "gemini-2.5-flash"
+GEMINI_PRO_MODEL_NAME = "gemini-2.5-pro"
 CLAUDE_MODEL_NAME = "claude-3-7-sonnet-20250219"
 DEEPSEEK_MODEL_NAME = 'deepseek-v3' # 废弃
 QWEN_V2_5_MODEL_NAME = 'qwen2.5-vl-72b-instruct'
