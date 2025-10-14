@@ -23,11 +23,14 @@ def get_score_from_str(s: str):
     """
     获取字符串里第一个数字
     """
-    for letter in s:
-        if letter.isdigit():
-            return int(letter)
-    else:
-        logger.error(f"解析错误: {s}")
+    if isinstance(s, (int, float)):
+        return s
+    elif isinstance(s,str):
+        for letter in s:
+            if letter.isdigit():
+                return int(letter)
+        else:
+            logger.error(f"解析错误: {s}")
     return None
 
 
@@ -78,6 +81,12 @@ def main():
             CLAUDE_MODEL_NAME,
         ],
         help="要评估的模型列表",
+    )
+    parser.add_argument(
+        "--output_prefix",
+        type=str,
+        default='',
+        help="最终输出结果的前缀",
     )
 
     args = parser.parse_args()
@@ -147,8 +156,12 @@ def main():
     df["菜名打分标准差"] = df[exist_model_score].std(axis=1)
 
     # 保存结果
+    if args.output_prefix:
+        output_prefix = args.output_prefix
+    else:
+        output_prefix = 'final_merged_scores'
     scores_output = os.path.join(
-        output_dir, f"final_merged_scores_{overall_avg:.3f}.csv"
+        output_dir, f"{output_prefix}_{overall_avg:.3f}.csv"
     )
     save_data_result(df, scores_output)
 

@@ -125,6 +125,12 @@ def main():
         default=False,
         help="是否随机打乱数据集顺序",
     )
+    parser.add_argument(
+        "--output_prefix",
+        type=str,
+        default='',
+        help="最终输出结果的前缀",
+    )
 
     args = parser.parse_args()
 
@@ -205,13 +211,14 @@ def main():
         logger.info(f"第 {i+1} 次评分所有批处理完成")
         scoring_end_time = time.time()
         logger.info(f"评分完成, 耗时 {scoring_end_time - eval_end_time:.2f} 秒")
-
         # 合并结果
         merge_cmd = [
             "python",
             os.path.join(script_dir, "merge.py"),
             "--input_dir",
             out_dir,
+            '--output_prefix',
+            args.output_prefix,
         ]
         subprocess.run(merge_cmd, check=True)
 
