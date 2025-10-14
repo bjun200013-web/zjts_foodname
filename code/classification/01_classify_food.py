@@ -926,7 +926,6 @@ if __name__ == "__main__":
     logger.info(f"* 成功解析文件数: {len(all_results)}")
     logger.error(f"* 失败解析文件数: {len(fail_pk_files)}")
     logger.error(f"* 失败解析文件: {fail_pk_files}")
-    logger.info(f"* 处理数据条数: {len(all_df) if 'all_df' in locals() else 0}")
     logger.info(f"* 总执行时间: {t:.2f} 秒")
     for fail_file in fail_pk_files:
         # os.remove(fail_file)
