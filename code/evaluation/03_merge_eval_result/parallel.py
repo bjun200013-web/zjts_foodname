@@ -212,13 +212,19 @@ def main():
         scoring_end_time = time.time()
         logger.info(f"评分完成, 耗时 {scoring_end_time - eval_end_time:.2f} 秒")
         # 合并结果
+        if args.output_prefix:
+            output_prefix = args.output_prefix
+        elif os.path.basename(data_file).startswith('results_'):
+            output_prefix = os.path.basename(data_file)[8:]
+        else:
+            output_prefix = ''
         merge_cmd = [
             "python",
             os.path.join(script_dir, "merge.py"),
             "--input_dir",
             out_dir,
             '--output_prefix',
-            args.output_prefix,
+            output_prefix,
         ]
         subprocess.run(merge_cmd, check=True)
 
