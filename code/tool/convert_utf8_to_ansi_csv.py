@@ -56,11 +56,11 @@ def convert_with_cleaning(source_folder, output_folder, target_encoding='gbk'):
 
 # 使用示例
 if __name__ == "__main__":
-    source_folder = r'C:\Users\crwu\Downloads'
-    output_folder = r'C:\Users\crwu\Downloads\aftertrans'
+    # source_folder = r'C:\Users\crwu\Downloads'
+    # output_folder = r'C:\Users\crwu\Downloads\aftertrans'
     
-    # source_folder = r'D:\crwu\data\foodname_classification\before_encoding_trans'
-    # output_folder = r'D:\crwu\data\foodname_classification\after_encoding_trans'
+    source_folder = r'D:\crwu\data\foodname_classification\before_encoding_trans'
+    output_folder = r'D:\crwu\data\foodname_classification\after_encoding_trans'
     if not os.path.exists(source_folder):
         print("源文件夹路径不存在！")
     else:
