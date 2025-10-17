@@ -776,7 +776,7 @@ def main():
             'Qwen3-VL-30B-A3B-Instruct': Qwen3VLMoeForConditionalGeneration,
             'Qwen3-VL-235B-A22B-Instruct': Qwen3VLMoeForConditionalGeneration,
         }
-        model_name = args.model_path.split('/')[-2]
+        model_name = args.model_path.rstrip('/').split('/')[-1]
         model = model_map.get(model_name, AutoModel).from_pretrained(
             args.model_path, **load_kwargs
         )
