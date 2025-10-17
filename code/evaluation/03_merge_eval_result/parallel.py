@@ -38,33 +38,55 @@ from packages.file_deal import get_output_dir, get_current_script_dir, get_lates
 
 
 def run_model_evaluation(
-    api_url,
-    api_key,
-    model_name,
-    max_test_img_num,
-    output_path,
-    api_script_path,
+    api_url: str,
+    api_key: str,
+    model_name: str,
+    max_test_img_num: int,
+    output_path: str,
+    evaluation_code_dir: str,
     shuffle=False,
 ):
     """
     执行模型评估
     """
-    cmd = [
-        "python",
-        api_script_path,
-        "--api_url",
-        api_url,
-        "--api_key",
-        api_key,
-        "--model_name",
-        model_name,
-        "--max_test_img_num",
-        str(max_test_img_num),
-        "--output_path",
-        output_path,
-        "--shuffle",
-        str(shuffle).lower(),
-    ]
+    if model_name.startswith('.') or model_name.startswith('/') or model_name.endswith('/'):
+        api_script_path = os.path.join(
+        evaluation_code_dir, "02_llm_ability_eval", "get_foodname_local_infer_with_torch.py"
+    )
+        cmd = [
+            "python",
+            api_script_path,
+            "--model_path",
+            model_name,
+            "--max_test_img_num",
+            str(max_test_img_num),
+            "--output_path",
+            output_path,
+            "--input_excel_path",
+            EVAL_DATA_EXCEL_PATH,
+            "--input_img_path",
+            EVAL_DATA_IMAGE_ROOT,
+        ]
+    else:
+        api_script_path = os.path.join(
+        evaluation_code_dir, "02_llm_ability_eval", "get_foodname_parallel_by_api.py"
+    )
+        cmd = [
+            "python",
+            api_script_path,
+            "--api_url",
+            api_url,
+            "--api_key",
+            api_key,
+            "--model_name",
+            model_name,
+            "--max_test_img_num",
+            str(max_test_img_num),
+            "--output_path",
+            output_path,
+            "--shuffle",
+            str(shuffle).lower(),
+        ]
     subprocess.run(cmd, check=True)
 
 
@@ -138,9 +160,6 @@ def main():
     script_abs_path = os.path.abspath(__file__)
     script_dir = os.path.dirname(script_abs_path)
     evaluation_code_dir = os.path.dirname(script_dir)
-    api_test_script = os.path.join(
-        evaluation_code_dir, "02_llm_ability_eval", "get_foodname_parallel_by_api.py"
-    )
     if not args.eval_only:
         # 执行模型评估
         run_model_evaluation(
@@ -149,7 +168,7 @@ def main():
             args.model_name,
             args.max_test_img_num,
             EVAL_RES_OUTPUT_PATH,
-            api_test_script,
+            evaluation_code_dir,
             args.shuffle,
         )
         eval_end_time = time.time()
@@ -159,15 +178,16 @@ def main():
         data_file = get_latest_file(EVAL_RES_OUTPUT_PATH)
         total = args.max_test_img_num  # 评估数据条数
     elif args.eval_input and os.path.exists(args.eval_input):
-        data_file = args.eval_input
-        if args.max_test_img_num == 0:
-            total = len(read_dataset(data_file))  # 评估数据条数
-        else:
-            total = args.max_test_img_num  # 评估数据条数
+        data_file = args.eval_input        
         eval_end_time = time.time()
     else:
         logger.error(f"开启了eval_only且路径{args.eval_input}不合法")
-    logger.info(f"评估结果文件: {data_file}")
+    if args.max_test_img_num == 0:
+        total = len(read_dataset(data_file))  # 评估数据条数
+    else:
+        total = args.max_test_img_num  # 评估数据条数
+    logger.info(f"评估结果文件: {data_file}, 数据共{total}条")
+    
 
     # 对评估结果进行多次评分
     for i in range(args.score_times):

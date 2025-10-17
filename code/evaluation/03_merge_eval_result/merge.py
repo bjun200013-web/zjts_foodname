@@ -124,7 +124,7 @@ def main():
             exist_model_score.append(model)
             df[model] = df[score_column].apply(get_score_from_str)
         else:
-            print(f"警告: 未找到列 '{score_column}', 跳过模型 {model}")
+            logger.warning(f"警告: 未找到列 '{score_column}', 跳过模型 {model}")
 
     # 计算每个模型的平均分
     logger.info("\n=== 各模型平均分 ===")
@@ -144,7 +144,7 @@ def main():
     # 计算所有模型的平均分
     if model_scores:
         overall_avg = sum(model_scores) / len(model_scores)
-        logger.info(f"\n=== 所有模型平均分 ===")
+        logger.info(f"=== 所有模型平均分 ===")
         logger.info(f"总体平均分: {overall_avg:.3f}")
 
     # 创建要添加的新行数据
