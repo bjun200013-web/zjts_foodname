@@ -194,7 +194,7 @@ def save_data_result(result, output_path):
         return
     suffix = os.path.splitext(output_path)[1].lower()
     if suffix == ".csv":
-        save_data_result_to_csv(df, output_path)
+        save_data_result_to_csv(df, output_path, encoding='gbk')
     elif suffix in [".xls", ".xlsx"]:
         save_data_result_to_excel(df, output_path)
     else:
