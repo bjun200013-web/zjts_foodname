@@ -16,12 +16,16 @@ def get_function_location():
         del frame
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(get_function_location()))
-EVAL_DATA_IMAGE_ROOT = os.path.join(PROJECT_ROOT, 'data/evaluation/Evaluation_data_0528')
-EVAL_DATA_EXCEL_PATH = os.path.join(PROJECT_ROOT, 'data/evaluation/test_data_excel/Evaluation_Data_0530_comments_by_hht.xlsx')
-# EVAL_DATA_DIMENSION_EXCEL_PATH = os.path.join(PROJECT_ROOT, 'data/evaluation/test_data_excel/Evaluation_Data_0530_comments_by_hht_dimension.xlsx')
-EVAL_DATA_DIMENSION_EXCEL_PATH = os.path.join(PROJECT_ROOT, 'data/evaluation/test_data_excel/food_name_database_V100R25C10.xlsx')
-EVAL_RES_OUTPUT_PATH = os.path.join(PROJECT_ROOT, 'data/evaluation/eval_res_of_llm')
-LLM_SCORE_OUTPUT_PATH = os.path.join(PROJECT_ROOT, 'data/evaluation/llm_score')
+CODE_DIR = os.path.join(PROJECT_ROOT, 'code')
+DATA_DIR = os.path.join(PROJECT_ROOT, 'data')
+DATA_EVALUATION_DIR = os.path.join(DATA_DIR, 'evaluation')
+EVAL_DATA_IMAGE_ROOT = os.path.join(DATA_EVALUATION_DIR, 'Evaluation_data_0528')
+EVAL_DATA_EXCEL_DIR = os.path.join(DATA_EVALUATION_DIR, 'test_data_excel')
+EVAL_DATA_EXCEL_PATH = os.path.join(EVAL_DATA_EXCEL_DIR, 'Evaluation_Data_0530_comments_by_hht.xlsx')
+# EVAL_DATA_DIMENSION_EXCEL_PATH = os.path.join(EVAL_DATA_EXCEL_DIR, 'Evaluation_Data_0530_comments_by_hht_dimension.xlsx')
+EVAL_DATA_DIMENSION_EXCEL_PATH = os.path.join(EVAL_DATA_EXCEL_DIR, 'food_name_database_V100R25C10.xlsx')
+EVAL_RES_OUTPUT_PATH = os.path.join(DATA_EVALUATION_DIR, 'eval_res_of_llm')
+LLM_SCORE_OUTPUT_PATH = os.path.join(DATA_EVALUATION_DIR, 'llm_score')
 
 GPT_MODEL_NAME =  "gpt-4o-2024-11-20"
 GEMINI_MODEL_NAME = "gemini-2.5-flash"
